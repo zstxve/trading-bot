@@ -12,6 +12,8 @@
         <string>-m</string>
         <string>tradingbot</string>
         <string>paper</string>
+        <string>--config</string>
+        <string>__PROJECT_DIR__/__CONFIG__</string>
     </array>
 
     <key>WorkingDirectory</key>

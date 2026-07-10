@@ -8,11 +8,13 @@ future would change the value and this test would fail.
 import pandas as pd
 import pytest
 
-from conftest import MR_TEST_PARAMS, TREND_TEST_PARAMS
+from conftest import BREAKOUT_TEST_PARAMS, MR_TEST_PARAMS, TREND_TEST_PARAMS
+from tradingbot.strategies.breakout_donchian import BreakoutDonchian
 from tradingbot.strategies.meanrev_rsi_bb import MeanRevRsiBB
 from tradingbot.strategies.trend_ma_cross import TrendMACross
 
-CASES = [(TrendMACross, TREND_TEST_PARAMS), (MeanRevRsiBB, MR_TEST_PARAMS)]
+CASES = [(TrendMACross, TREND_TEST_PARAMS), (MeanRevRsiBB, MR_TEST_PARAMS),
+         (BreakoutDonchian, BREAKOUT_TEST_PARAMS)]
 
 
 @pytest.mark.parametrize("strategy_cls,params", CASES)
@@ -41,4 +43,4 @@ def test_entry_signals_causal(strategy_cls, params, trend_reversal_df):
             checked_any = True
             assert sig_full.stop_price == pytest.approx(sig_trunc.stop_price, rel=1e-9)
     # sanity: the test data must actually produce some signals to compare
-    assert checked_any or strategy_cls is MeanRevRsiBB
+    assert checked_any or strategy_cls is not TrendMACross

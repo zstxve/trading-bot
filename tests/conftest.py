@@ -84,3 +84,8 @@ MR_TEST_PARAMS = {
     "regime_timeframe": "4h", "regime_ema": 30, "atr_n": 14,
     "atr_stop_mult": 2.0, "max_hold_bars": 48,
 }
+BREAKOUT_TEST_PARAMS = {
+    "entry_n": 20, "exit_n": 10, "atr_n": 14, "atr_stop_mult": 3.0,
+    "regime_timeframe": "4h", "regime_ema": 20, "regime_filter": True,
+    "allow_short": False,
+}

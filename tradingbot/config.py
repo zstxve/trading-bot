@@ -63,10 +63,28 @@ class MeanRevParams(StrictModel):
         return self
 
 
+class BreakoutParams(StrictModel):
+    entry_n: int = Field(55, ge=5)       # break above the prior N-bar high
+    exit_n: int = Field(20, ge=3)        # exit below the prior M-bar low
+    atr_n: int = Field(14, ge=2)
+    atr_stop_mult: float = Field(3.0, gt=0)
+    regime_timeframe: Literal["4h", "1d"] = "1d"
+    regime_ema: int = Field(100, ge=2)
+    regime_filter: bool = True
+    allow_short: bool = False
+
+    @model_validator(mode="after")
+    def _cross_checks(self) -> "BreakoutParams":
+        if self.exit_n >= self.entry_n:
+            raise ValueError("exit_n must be < entry_n")
+        return self
+
+
 class StrategySection(StrictModel):
-    active: Literal["trend_ma_cross", "meanrev_rsi_bb"] = "trend_ma_cross"
+    active: Literal["trend_ma_cross", "meanrev_rsi_bb", "breakout_donchian"] = "trend_ma_cross"
     trend_ma_cross: TrendParams = TrendParams()
     meanrev_rsi_bb: MeanRevParams = MeanRevParams()
+    breakout_donchian: BreakoutParams = BreakoutParams()
 
     def active_params(self) -> dict:
         return getattr(self, self.active).model_dump()

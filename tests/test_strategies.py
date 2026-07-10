@@ -1,7 +1,8 @@
 import pandas as pd
 
-from conftest import MR_TEST_PARAMS, TREND_TEST_PARAMS
+from conftest import BREAKOUT_TEST_PARAMS, MR_TEST_PARAMS, TREND_TEST_PARAMS
 from tradingbot.portfolio import Position
+from tradingbot.strategies.breakout_donchian import BreakoutDonchian
 from tradingbot.strategies.meanrev_rsi_bb import MeanRevRsiBB
 from tradingbot.strategies.trend_ma_cross import TrendMACross
 
@@ -68,9 +69,58 @@ def test_meanrev_time_stop(dip_uptrend_df):
     assert strat.exit_signal(prepared, 500, pos) == "time_stop"
 
 
+def test_breakout_enters_on_new_highs(trend_up_df):
+    strat = BreakoutDonchian(BREAKOUT_TEST_PARAMS)
+    prepared = strat.prepare(trend_up_df)
+    entries = [(i, s) for i in range(len(prepared))
+               if (s := strat.entry_signal(prepared, i)) is not None]
+    assert len(entries) > 0, "no breakout entries in a strong uptrend"
+    for i, sig in entries:
+        row = prepared.iloc[i]
+        assert row["close"] > row["entry_high"]      # broke the PRIOR channel
+        assert 0 < sig.stop_price < row["close"]
+
+
+def test_breakout_channel_excludes_current_bar(trend_up_df):
+    strat = BreakoutDonchian(BREAKOUT_TEST_PARAMS)
+    prepared = strat.prepare(trend_up_df)
+    # entry_high at bar i must not include bar i's own close: on a monotonic
+    # run of new highs, close > entry_high must hold (it wouldn't if the
+    # channel contained the current bar).
+    valid = prepared.dropna(subset=["entry_high"])
+    highest = valid["close"].cummax()
+    at_new_high = valid["close"] >= highest
+    assert (valid.loc[at_new_high, "close"] > valid.loc[at_new_high, "entry_high"]).any()
+
+
+def test_breakout_exit_after_reversal(trend_reversal_df):
+    strat = BreakoutDonchian(BREAKOUT_TEST_PARAMS)
+    prepared = strat.prepare(trend_reversal_df)
+    dummy = Position(symbol="X", qty=1.0, entry_price=100.0,
+                     entry_time=prepared.index[0])
+    assert any(strat.exit_signal(prepared, i, dummy) == "channel_exit"
+               for i in range(950, len(prepared)))
+
+
+def test_breakout_short_side_mirrors(downtrend_df):
+    strat = BreakoutDonchian({**BREAKOUT_TEST_PARAMS, "allow_short": True})
+    prepared = strat.prepare(downtrend_df)
+    shorts = [s for i in range(len(prepared))
+              if (s := strat.entry_signal(prepared, i)) is not None]
+    assert len(shorts) > 0
+    assert all(s.side == "short" and s.stop_price > 0 for s in shorts)
+    # long-only variant must find nothing in a downtrend
+    long_only = BreakoutDonchian(BREAKOUT_TEST_PARAMS)
+    prepared_lo = long_only.prepare(downtrend_df)
+    assert all(long_only.entry_signal(prepared_lo, i) is None
+               for i in range(len(prepared_lo)))
+
+
 def test_invalid_params_rejected():
     import pytest
     with pytest.raises(ValueError):
         TrendMACross({**TREND_TEST_PARAMS, "fast_ema": 50, "slow_ema": 20})
     with pytest.raises(ValueError):
         MeanRevRsiBB({**MR_TEST_PARAMS, "rsi_buy": 60.0, "rsi_exit": 55.0})
+    with pytest.raises(ValueError):
+        BreakoutDonchian({**BREAKOUT_TEST_PARAMS, "entry_n": 10, "exit_n": 20})

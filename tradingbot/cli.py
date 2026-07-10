@@ -226,7 +226,8 @@ def main(argv=None) -> None:
         if data_opts:
             p.add_argument("--synthetic", action="store_true",
                            help="use deterministic synthetic data (offline demo/testing)")
-            p.add_argument("--strategy", choices=["trend_ma_cross", "meanrev_rsi_bb"],
+            p.add_argument("--strategy",
+                           choices=["trend_ma_cross", "meanrev_rsi_bb", "breakout_donchian"],
                            help="override strategy.active")
             p.add_argument("--history-days", type=int, help="override data.history_days")
 

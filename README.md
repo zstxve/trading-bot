@@ -105,7 +105,9 @@ Reports (metrics JSON, trades CSV, PNG charts) land in `reports/<run_id>/`. Logs
 
 **`meanrev_rsi_bb`** — long when RSI(14) < 30 *and* price is below the lower Bollinger band, but **only while price holds above the 4h EMA** — it buys dips inside uptrends and refuses falling knives. Exits on RSI recovery, middle-band tag, 2×ATR stop, or a 48-bar time stop.
 
-Both are deliberately boring, well-known baselines. They are starting points for your own research, not finished products.
+**`breakout_donchian`** — turtle-style channel breakout, designed for daily bars (`config_daily.yaml`): long when the close breaks the prior 55-bar high (the breakout bar is excluded from its own channel — `shift(1)`), gated by a slow-EMA regime filter. Exit below the prior 20-bar low or on a 3×ATR stop. Mirrors short with `allow_short`.
+
+All three are deliberately boring, well-known baselines. They are starting points for your own research, not finished products. `config_daily.yaml` runs the same system on 1d bars with 8 years of history — ~20× fewer trades, so costs stop dominating.
 
 ## How the system avoids fooling you
 
