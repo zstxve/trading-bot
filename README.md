@@ -91,6 +91,10 @@ python -m tradingbot paper
 #      environment:  TRADINGBOT_LIVE_ACK=I-UNDERSTAND-LIVE-TRADING-RISKS-AND-ACCEPT-LOSSES
 #      CLI flag:     --i-really-want-live
 python -m tradingbot live --i-really-want-live
+
+# 6. Ops: divergence report + read-only status page
+python -m tradingbot report      # paper vs backtest over the same dates
+python -m tradingbot dashboard   # writes state/dashboard.html (also auto-updated hourly)
 ```
 
 Reports (metrics JSON, trades CSV, PNG charts) land in `reports/<run_id>/`. Logs in `logs/`. Paper state and the kill-switch file in `state/`.
@@ -139,11 +143,25 @@ Both are deliberately boring, well-known baselines. They are starting points for
 6. **Software bugs** — a sign error in sizing is worth more damage than a bad strategy. That is why risk rules, sizing, validation and engine mechanics have dedicated tests, and why live orders re-validate everything.
 7. **Black swans** — flash crashes gap through stops (the backtest models gap fills pessimistically, reality can be worse); stablecoins can depeg; exchanges can freeze withdrawals. Position sizing is the only defense that always works: never fund an account with money you can't lose.
 
+## Running paper 24/7 (macOS)
+
+```bash
+./deploy/install_launchd.sh     # start at login, restart on crash
+launchctl list | grep tradingbot
+./deploy/uninstall_launchd.sh   # graceful stop (state persisted)
+```
+
+launchd restarts the process but cannot keep a sleeping laptop awake — for a real multi-month run use a small VPS (any always-on Linux box: same code, use systemd or `nohup` + cron) or prevent sleep explicitly. The runner persists state after every cycle and resumes on restart, so restarts are safe.
+
+**Alerts**: create a Telegram bot (@BotFather), put `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, set `alerts.telegram_enabled: true`. You get: runner start/stop, every closed trade, risk breaches, kill-switch engagement, and a daily summary. Alert delivery failures are logged and never interrupt trading.
+
+**Dashboard**: `state/dashboard.html` — self-contained, read-only, regenerated hourly by the runner (or on demand via `python -m tradingbot dashboard`). Deliberately has no buttons: the kill switch stays a file.
+
 ## Paper-trade protocol (before any real money)
 
 1. Run `backtest` and `walkforward` on both strategies. Read the OOS numbers only.
-2. Run `python -m tradingbot paper` continuously (a cheap VPS or an always-on machine) for **at least 3 months or 100 trades, whichever comes later**.
-3. Weekly, compare paper results against the backtest over the same dates: trade frequency, average win/loss, exposure, drawdown. Divergence means the model is missing something — find out what before continuing the clock.
+2. Run `python -m tradingbot paper` continuously (see "Running paper 24/7") for **at least 3 months or 100 trades, whichever comes later**.
+3. Weekly, run `python -m tradingbot report` — it backtests the same config over the paper session's exact date range and prints paper vs backtest side by side with divergence red flags (trade count, average trade, drawdown).
 4. Kill-switch drills: touch `state/KILL_SWITCH` while it runs; verify it halts. Kill the process mid-position; verify restart resumes state correctly.
 5. Log every manual intervention. If you keep overriding the bot, you don't have a system.
 

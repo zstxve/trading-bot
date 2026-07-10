@@ -27,6 +27,7 @@ from typing import Dict, Optional
 
 import pandas as pd
 
+from tradingbot.alerts import Notifier
 from tradingbot.config import AppConfig
 from tradingbot.costs import CostModel
 from tradingbot.data.loader import TIMEFRAME_SECONDS, fetch_ohlcv, make_public_exchange, tf_timedelta
@@ -56,8 +57,15 @@ class LiveRunner:
 
         state_dir = Path(cfg.live.state_dir)
         state_dir.mkdir(parents=True, exist_ok=True)
-        self.state_path = state_dir / ("live_state.json" if live_mode else "paper_state.json")
+        prefix = "live" if live_mode else "paper"
+        self.state_path = state_dir / f"{prefix}_state.json"
+        self.trades_csv = state_dir / f"{prefix}_trades.csv"
+        self.equity_csv = state_dir / f"{prefix}_equity.csv"
         self.kill = KillSwitch(state_dir / "KILL_SWITCH")
+        self.notifier = Notifier(cfg.alerts, logger)
+        self._kill_was_engaged = self.kill.engaged()
+        self._summary_day = None
+        self._trades_today = 0
 
         self.portfolio, risk_state = self._load_state()
         prices = {}
@@ -118,11 +126,30 @@ class LiveRunner:
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         tmp.replace(self.state_path)  # atomic on POSIX
 
+    def _append_csv(self, path: Path, header: str, row: str) -> None:
+        """Append-only history files (trades, equity) for reports/dashboard."""
+        new = not path.exists()
+        with path.open("a", encoding="utf-8") as fh:
+            if new:
+                fh.write(header + "\n")
+            fh.write(row + "\n")
+
+    def _check_kill_transition(self) -> None:
+        """Alert exactly once when the kill switch flips on."""
+        engaged = self.kill.engaged()
+        if engaged and not self._kill_was_engaged:
+            self.notifier.send(f"🔴 KILL SWITCH ENGAGED: {self.kill.reason()}\n"
+                               f"Trading halted. Investigate, then delete {self.kill.path}.")
+        self._kill_was_engaged = engaged
+
     # ------------------------------------------------------------------ loop
     def run(self) -> None:
-        log_event(self.log, "runner_start", mode="LIVE" if self.live_mode else "PAPER",
+        mode = "LIVE" if self.live_mode else "PAPER"
+        log_event(self.log, "runner_start", mode=mode,
                   strategy=self.strategy.name, symbols=",".join(self.cfg.data.symbols),
                   timeframe=self.tf, cash=round(self.portfolio.cash, 2))
+        self.notifier.send(f"▶️ {mode} runner started: {self.strategy.name} on "
+                           f"{', '.join(self.cfg.data.symbols)} ({self.tf})")
         if self.kill.engaged():
             self.log.error("kill switch engaged (%s) — refusing to start. "
                            "Delete %s after investigating.", self.kill.reason(), self.kill.path)
@@ -138,6 +165,7 @@ class LiveRunner:
                 except Exception as exc:  # noqa: BLE001 — loop must survive bad cycles
                     self.log.exception("bar cycle failed: %s", exc)
                     self.risk.on_api_error()
+                self._check_kill_transition()
                 self._persist_state()
         finally:
             self.broker.cancel_all()
@@ -145,6 +173,9 @@ class LiveRunner:
             log_event(self.log, "runner_stop", cash=round(self.portfolio.cash, 2),
                       open_positions=len(self.portfolio.positions),
                       kill_switch=self.kill.engaged())
+            self.notifier.send(f"⏹ runner stopped. cash={self.portfolio.cash:.2f} "
+                               f"open_positions={len(self.portfolio.positions)} "
+                               f"kill_switch={self.kill.engaged()}")
 
     def _sleep_until_next_bar(self) -> None:
         """Sleep until just after the next bar close, polling stops meanwhile."""
@@ -213,6 +244,7 @@ class LiveRunner:
         for e in events:
             log_event(self.log, "risk_breach", level=logging.WARNING, breach=e,
                       equity=round(equity, 2))
+            self.notifier.send(f"⚠️ risk breach: {e} at equity {equity:.2f}")
         if events:
             for symbol in list(self.portfolio.positions):
                 self._execute(Order(symbol=symbol, side="sell",
@@ -233,6 +265,32 @@ class LiveRunner:
                   cash=round(self.portfolio.cash, 2),
                   positions={s: round(p.qty, 8) for s, p in self.portfolio.positions.items()},
                   halted=self.risk.trading_halted)
+        self._append_csv(self.equity_csv, "timestamp,equity,cash,n_positions",
+                         f"{ts.isoformat()},{equity:.2f},{self.portfolio.cash:.2f},"
+                         f"{len(self.portfolio.positions)}")
+
+        # Daily summary on UTC day rollover.
+        day = ts.date()
+        if self._summary_day is None:
+            self._summary_day = day
+        elif day != self._summary_day:
+            if self.cfg.alerts.daily_summary:
+                pos_txt = ", ".join(f"{s} @{p.entry_price:.2f}"
+                                    for s, p in self.portfolio.positions.items()) or "none"
+                self.notifier.send(
+                    f"📊 daily summary {self._summary_day}: equity {equity:.2f}, "
+                    f"cash {self.portfolio.cash:.2f}, trades closed {self._trades_today}, "
+                    f"positions: {pos_txt}, halted={self.risk.trading_halted}"
+                )
+            self._summary_day = day
+            self._trades_today = 0
+
+        # Keep the read-only dashboard current (best-effort, never fatal).
+        try:
+            from tradingbot.dashboard import generate_dashboard
+            generate_dashboard(self.cfg, prefix="live" if self.live_mode else "paper")
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("dashboard regeneration failed: %s", exc)
 
     def _execute(self, order: Order, ref_price: float) -> Optional[Fill]:
         prices = {order.symbol: ref_price}
@@ -256,4 +314,17 @@ class LiveRunner:
             log_event(self.log, "trade_closed", symbol=trade.symbol,
                       pnl=round(trade.pnl, 2), return_pct=round(trade.return_pct * 100, 3),
                       reason=trade.exit_reason)
+            self._trades_today += 1
+            self._append_csv(
+                self.trades_csv,
+                "symbol,entry_time,exit_time,entry_price,exit_price,qty,pnl,fees,"
+                "return_pct,bars_held,exit_reason",
+                f"{trade.symbol},{trade.entry_time.isoformat()},{trade.exit_time.isoformat()},"
+                f"{trade.entry_price},{trade.exit_price},{trade.qty},{trade.pnl},{trade.fees},"
+                f"{trade.return_pct},{trade.bars_held},{trade.exit_reason}",
+            )
+            if self.cfg.alerts.notify_trades:
+                emoji = "🟢" if trade.pnl >= 0 else "🔻"
+                self.notifier.send(f"{emoji} closed {trade.symbol}: pnl {trade.pnl:+.2f} "
+                                   f"({trade.return_pct:+.2%}), reason {trade.exit_reason}")
         return fill

@@ -138,6 +138,14 @@ class LoggingConfig(StrictModel):
     json_logs: bool = False
 
 
+class AlertsConfig(StrictModel):
+    # Telegram credentials come from env (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID),
+    # never from this file. With telegram_enabled=false everything is a no-op.
+    telegram_enabled: bool = False
+    notify_trades: bool = True
+    daily_summary: bool = True
+
+
 class AppConfig(StrictModel):
     mode: Literal["backtest", "paper", "live"] = "paper"
     data: DataConfig
@@ -148,6 +156,7 @@ class AppConfig(StrictModel):
     walkforward: WalkForwardConfig = WalkForwardConfig()
     live: LiveConfig = LiveConfig()
     logging: LoggingConfig = LoggingConfig()
+    alerts: AlertsConfig = AlertsConfig()
 
 
 def load_config(path: str | Path) -> AppConfig:

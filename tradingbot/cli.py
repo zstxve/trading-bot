@@ -6,6 +6,8 @@ Commands:
   walkforward   rolling walk-forward optimisation, out-of-sample stitched
   paper         paper trading loop (default mode, simulated fills, real data)
   live          live trading — DISABLED unless all three safety gates pass
+  report        paper-vs-backtest divergence report over the same dates
+  dashboard     regenerate the read-only HTML status page (state/dashboard.html)
 """
 from __future__ import annotations
 
@@ -193,6 +195,24 @@ def cmd_live(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    from tradingbot.report import build_report
+
+    cfg = _load(args)
+    logger = setup_logging(cfg.logging, _run_id("report"))
+    print(build_report(cfg, logger))
+    return 0
+
+
+def cmd_dashboard(args) -> int:
+    from tradingbot.dashboard import generate_dashboard
+
+    cfg = _load(args)
+    out = generate_dashboard(cfg, prefix=args.session)
+    print(f"dashboard written to {out}\nopen it:  open {out}")
+    return 0
+
+
 # ---------------------------------------------------------------- entrypoint
 def main(argv=None) -> None:
     load_dotenv()  # pull BINANCE_API_KEY etc. from .env if present
@@ -231,6 +251,15 @@ def main(argv=None) -> None:
     p.add_argument("--i-really-want-live", action="store_true",
                    help="third safety gate (with live.enabled and TRADINGBOT_LIVE_ACK)")
     p.set_defaults(func=cmd_live)
+
+    p = sub.add_parser("report", help="paper-vs-backtest divergence report")
+    add_common(p, data_opts=False)
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("dashboard", help="regenerate read-only HTML status page")
+    add_common(p, data_opts=False)
+    p.add_argument("--session", choices=["paper", "live"], default="paper")
+    p.set_defaults(func=cmd_dashboard)
 
     args = parser.parse_args(argv)
     try:

@@ -93,3 +93,12 @@ logging:
   level: INFO
   dir: "logs"
   json_logs: false           # true = machine-readable JSON lines in the log file
+
+alerts:
+  # Telegram push alerts from the paper/live loop. Credentials via env:
+  # TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (see .env.example). Alerts fire on
+  # kill switch, risk breaches, closed trades and a daily summary. Failures
+  # to deliver are logged and never interrupt trading.
+  telegram_enabled: false
+  notify_trades: true
+  daily_summary: true
