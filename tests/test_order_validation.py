@@ -66,20 +66,29 @@ def test_rejects_exposure_breach():
     assert not ok and reason == "max_asset_exposure"     # 3000 > 25% of 10k
 
 
-def test_halt_blocks_buys_but_never_sells():
+def test_halt_blocks_opens_but_never_closes():
     pf, rm = _ctx()
     pf.buy("BTC", qty=10, price=100, fee=0, ts=TS)
     rm.kill_switch.engage("test")
-    ok, reason = _check(Order("BTC", "buy", 5.0, "t", stop_price=95.0), pf, rm)
+    prices = {"BTC": 100.0, "ETH": 100.0}
+    ok, reason = _check(Order("ETH", "buy", 5.0, "t", stop_price=95.0), pf, rm, prices)
     assert not ok and reason == "trading_halted"
-    ok, reason = _check(Order("BTC", "sell", 10.0, "flatten"), pf, rm)
-    assert ok, f"sells must always pass while halted, got: {reason}"
+    ok, reason = _check(Order("BTC", "sell", 10.0, "flatten"), pf, rm, prices)
+    assert ok, f"closing orders must always pass while halted, got: {reason}"
 
 
-def test_sell_requires_position():
+def test_buy_cannot_pyramid_existing_long():
+    pf, rm = _ctx()
+    pf.buy("BTC", qty=10, price=100, fee=0, ts=TS)
+    ok, reason = _check(Order("BTC", "buy", 5.0, "t", stop_price=95.0), pf, rm)
+    assert not ok and reason == "already_long"
+
+
+def test_sell_without_position_is_a_short_attempt():
+    # allow_short defaults to False -> the gate, not "no_position", fires.
     pf, rm = _ctx()
     ok, reason = _check(Order("BTC", "sell", 1.0, "t"), pf, rm)
-    assert not ok and reason == "no_position"
+    assert not ok and reason == "short_disabled"
 
 
 def test_sell_cannot_exceed_position():

@@ -23,6 +23,7 @@ class EntrySignal:
     stop_price: float                 # mandatory: no entry without a stop
     take_profit: Optional[float]
     reason: str
+    side: str = "long"                # "long" | "short" (short needs risk.allow_short)
 
 
 class Strategy(ABC):

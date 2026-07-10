@@ -9,17 +9,22 @@ Anti-look-ahead guarantees (structural, not aspirational):
   - gaps through the stop fill at the open (worse than the stop), not at the
     stop price
 
+Positions are signed (long > 0, short < 0). Order side semantics follow
+execution/validation.py: buy covers a short or opens a long; sell closes a
+long or opens a short (shorts gated by risk.allow_short). Short positions
+accrue borrow/funding carry per bar (CostModel.short_borrow_bps_per_day).
+
 Per-bar sequence:
   1. execute orders queued on the previous bar at this bar's open
   2. check stops/take-profits against this bar's high/low
   3. mark-to-market at close; update the risk manager
-  4. on a risk breach: purge queued buys, queue flattening sells
+  4. on a risk breach: purge queued opening orders, queue flattening orders
   5. run strategy decisions for the next bar
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -45,7 +50,7 @@ class BacktestResult:
     fills: List[Fill]
     breaches: List[Tuple[pd.Timestamp, str]]
     exposure: float              # fraction of bars with >=1 open position
-    turnover_notional: float     # total traded notional (buys + sells)
+    turnover_notional: float     # total traded notional (opens + closes)
     initial_capital: float
     rejected_orders: int = 0
     final_positions: int = 0
@@ -53,6 +58,11 @@ class BacktestResult:
     @property
     def n_trades(self) -> int:
         return len(self.trades)
+
+
+def _closing_order(pos) -> Order:
+    return Order(symbol=pos.symbol, side="sell" if pos.is_long else "buy",
+                 qty=pos.abs_qty, reason="risk_flatten")
 
 
 def run_backtest(
@@ -72,6 +82,13 @@ def run_backtest(
     # O(1) timestamp -> row position per symbol.
     pos_of = {s: {ts: i for i, ts in enumerate(df.index)} for s, df in dfs.items()}
 
+    # Short carry per bar: pro-rate the daily borrow rate by bar duration.
+    if len(union_index) > 1:
+        bar_frac_of_day = float(pd.Series(union_index).diff().median() / pd.Timedelta("1D"))
+    else:
+        bar_frac_of_day = 1 / 24
+    borrow_rate_per_bar = cost_model.short_borrow_bps_per_day / 1e4 * bar_frac_of_day
+
     portfolio = Portfolio(cash=initial_capital)
     risk = RiskManager(risk_cfg, initial_capital, KillSwitch(None), logger)
 
@@ -88,18 +105,40 @@ def run_backtest(
         if logger:
             log_event(logger, event, level=logging.DEBUG, **kw)
 
-    def _execute_sell(symbol: str, ref_price: float, ts: pd.Timestamp, reason: str):
+    def _close_position(symbol: str, ref_price: float, ts: pd.Timestamp, reason: str):
         nonlocal turnover
         pos = portfolio.positions.get(symbol)
         if pos is None:
             return
-        price = cost_model.fill_price(ref_price, "sell")
-        fee = cost_model.fee(pos.qty * price)
-        qty = pos.qty
-        portfolio.sell(symbol, price, fee, ts, reason)
-        fills.append(Fill(symbol, "sell", qty, price, fee, ts, reason))
+        side = "sell" if pos.is_long else "buy"
+        price = cost_model.fill_price(ref_price, side)
+        fee = cost_model.fee(pos.abs_qty * price)
+        qty = pos.abs_qty
+        portfolio.close(symbol, price, fee, ts, reason)
+        fills.append(Fill(symbol, side, qty, price, fee, ts, reason))
         turnover += qty * price
-        _log("fill", symbol=symbol, side="sell", qty=qty, price=price, reason=reason)
+        _log("fill", symbol=symbol, side=side, qty=qty, price=price, reason=reason)
+
+    def _open_position(order: Order, open_px: float, ts: pd.Timestamp):
+        nonlocal turnover
+        going_long = order.side == "buy"
+        price = cost_model.fill_price(open_px, order.side)
+        qty = order.qty
+        if going_long:
+            # Re-clip to cash: the open can differ from the close we sized on.
+            fee_rate = cost_model.fee_bps / 1e4
+            qty = min(qty, portfolio.cash * 0.999 / (price * (1 + fee_rate)))
+        if qty <= 0 or qty * price < risk_cfg.min_order_notional:
+            _log("order_dropped_unaffordable", symbol=order.symbol)
+            return
+        fee = cost_model.fee(qty * price)
+        signed_qty = qty if going_long else -qty
+        portfolio.open(order.symbol, signed_qty, price, fee, ts,
+                       stop_price=order.stop_price, take_profit=order.take_profit)
+        fills.append(Fill(order.symbol, order.side, qty, price, fee, ts, order.reason))
+        turnover += qty * price
+        _log("fill", symbol=order.symbol, side=order.side, qty=qty, price=price,
+             reason=order.reason)
 
     for ts in union_index:
         bars_today = {s: pos_of[s].get(ts) for s in dfs}
@@ -115,24 +154,21 @@ def run_backtest(
                     _log("order_expired", symbol=order.symbol, side=order.side)
                 continue
             open_px = float(dfs[order.symbol]["open"].iloc[j])
-            if order.side == "buy":
-                if order.symbol in portfolio.positions or risk.trading_halted:
-                    continue  # state changed since queuing; drop silently-but-logged
-                price = cost_model.fill_price(open_px, "buy")
-                fee_rate = cost_model.fee_bps / 1e4
-                # Re-clip to cash: the open can differ from the close we sized on.
-                qty = min(order.qty, portfolio.cash * 0.999 / (price * (1 + fee_rate)))
-                if qty <= 0 or qty * price < risk_cfg.min_order_notional:
-                    _log("order_dropped_unaffordable", symbol=order.symbol)
+            pos = portfolio.positions.get(order.symbol)
+            is_close = pos is not None and (
+                (order.side == "sell" and pos.is_long)
+                or (order.side == "buy" and not pos.is_long)
+            )
+            if is_close:
+                _close_position(order.symbol, open_px, ts, order.reason)
+            elif pos is None:
+                if risk.trading_halted:
+                    continue  # state changed since queuing; drop
+                if order.side == "sell" and not risk_cfg.allow_short:
                     continue
-                fee = cost_model.fee(qty * price)
-                portfolio.buy(order.symbol, qty, price, fee, ts,
-                              stop_price=order.stop_price, take_profit=order.take_profit)
-                fills.append(Fill(order.symbol, "buy", qty, price, fee, ts, order.reason))
-                turnover += qty * price
-                _log("fill", symbol=order.symbol, side="buy", qty=qty, price=price, reason=order.reason)
-            else:
-                _execute_sell(order.symbol, open_px, ts, order.reason)
+                _open_position(order, open_px, ts)
+            # else: same-direction add — drop silently (validation rejects
+            # these upstream; this only catches state races)
         pending = still_pending
 
         # -- 2. intrabar stop / take-profit ----------------------------------
@@ -144,24 +180,45 @@ def run_backtest(
             row = dfs[symbol].iloc[j]
             o, h, l = float(row["open"]), float(row["high"]), float(row["low"])
             exit_ref, reason = None, None
-            if pos.stop_price is not None:
-                if o <= pos.stop_price:
-                    exit_ref, reason = o, "stop_gap"       # gapped through: fill at open
-                elif l <= pos.stop_price:
-                    exit_ref, reason = pos.stop_price, "stop"
-            if exit_ref is None and pos.take_profit is not None:
-                if o >= pos.take_profit:
-                    exit_ref, reason = o, "take_profit_gap"
-                elif h >= pos.take_profit:
-                    exit_ref, reason = pos.take_profit, "take_profit"
+            if pos.is_long:
+                if pos.stop_price is not None:
+                    if o <= pos.stop_price:
+                        exit_ref, reason = o, "stop_gap"     # gapped through: fill at open
+                    elif l <= pos.stop_price:
+                        exit_ref, reason = pos.stop_price, "stop"
+                if exit_ref is None and pos.take_profit is not None:
+                    if o >= pos.take_profit:
+                        exit_ref, reason = o, "take_profit_gap"
+                    elif h >= pos.take_profit:
+                        exit_ref, reason = pos.take_profit, "take_profit"
+            else:
+                if pos.stop_price is not None:
+                    if o >= pos.stop_price:
+                        exit_ref, reason = o, "stop_gap"     # gap UP through a short stop
+                    elif h >= pos.stop_price:
+                        exit_ref, reason = pos.stop_price, "stop"
+                if exit_ref is None and pos.take_profit is not None:
+                    if o <= pos.take_profit:
+                        exit_ref, reason = o, "take_profit_gap"
+                    elif l <= pos.take_profit:
+                        exit_ref, reason = pos.take_profit, "take_profit"
             if exit_ref is not None:
-                _execute_sell(symbol, exit_ref, ts, reason)
+                _close_position(symbol, exit_ref, ts, reason)
                 pending = [p for p in pending if p[0].symbol != symbol]
 
         # -- 3. mark-to-market and risk state ---------------------------------
         for symbol, j in bars_today.items():
             if j is not None:
                 last_close[symbol] = float(dfs[symbol]["close"].iloc[j])
+
+        # Short borrow/funding carry, accrued on the marked notional.
+        if borrow_rate_per_bar > 0:
+            for symbol, pos in portfolio.positions.items():
+                if not pos.is_long and bars_today.get(symbol) is not None:
+                    carry = pos.abs_qty * last_close[symbol] * borrow_rate_per_bar
+                    portfolio.cash -= carry
+                    pos.carry_fees += carry
+
         equity = portfolio.equity(last_close)
         equity_vals.append(equity)
 
@@ -172,14 +229,16 @@ def run_backtest(
                 if logger:
                     log_event(logger, "risk_breach", level=logging.WARNING,
                               breach=e, ts=str(ts), equity=round(equity, 2))
-            # Purge queued buys; flatten every open position at the next open.
-            pending = [p for p in pending if p[0].side == "sell"]
-            queued_sells = {p[0].symbol for p in pending}
-            for symbol in portfolio.positions:
-                if symbol not in queued_sells:
-                    pending.append([Order(symbol=symbol, side="sell",
-                                          qty=portfolio.positions[symbol].qty,
-                                          reason="risk_flatten"), 0])
+            # Purge queued opening orders; flatten every position at next open.
+            def _is_closing(o: Order) -> bool:
+                p = portfolio.positions.get(o.symbol)
+                return p is not None and ((o.side == "sell" and p.is_long)
+                                          or (o.side == "buy" and not p.is_long))
+            pending = [p for p in pending if _is_closing(p[0])]
+            queued = {p[0].symbol for p in pending}
+            for symbol, pos in portfolio.positions.items():
+                if symbol not in queued:
+                    pending.append([_closing_order(pos), 0])
 
         # -- 4. strategy decisions for the next bar ---------------------------
         pending_symbols = {p[0].symbol for p in pending}
@@ -212,7 +271,7 @@ def run_backtest(
     if liquidate_at_end:
         # Close leftovers at their last close so trade stats cover everything.
         for symbol in list(portfolio.positions):
-            _execute_sell(symbol, last_close[symbol], union_index[-1], "end_of_data")
+            _close_position(symbol, last_close[symbol], union_index[-1], "end_of_data")
 
     equity_series = pd.Series(equity_vals, index=union_index, name="equity")
     return BacktestResult(

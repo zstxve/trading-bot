@@ -103,7 +103,8 @@ class LiveRunner:
                 symbol=p["symbol"], qty=p["qty"], entry_price=p["entry_price"],
                 entry_time=pd.Timestamp(p["entry_time"]),
                 stop_price=p.get("stop_price"), take_profit=p.get("take_profit"),
-                entry_fee=p.get("entry_fee", 0.0), bars_held=p.get("bars_held", 0),
+                entry_fee=p.get("entry_fee", 0.0), carry_fees=p.get("carry_fees", 0.0),
+                bars_held=p.get("bars_held", 0),
             )
         self.log.info("resumed state: cash=%.2f positions=%d", pf.cash, len(pf.positions))
         return pf, raw.get("risk")
@@ -115,7 +116,7 @@ class LiveRunner:
                 {"symbol": p.symbol, "qty": p.qty, "entry_price": p.entry_price,
                  "entry_time": p.entry_time.isoformat(), "stop_price": p.stop_price,
                  "take_profit": p.take_profit, "entry_fee": p.entry_fee,
-                 "bars_held": p.bars_held}
+                 "carry_fees": p.carry_fees, "bars_held": p.bars_held}
                 for p in self.portfolio.positions.values()
             ],
             "risk": {"peak_equity": self.risk.peak_equity,
@@ -205,10 +206,12 @@ class LiveRunner:
                 logger=self.log,
             )
             last = float(ticker.get("last") or 0)
-            if last and last <= pos.stop_price:
+            hit = (last <= pos.stop_price) if pos.is_long else (last >= pos.stop_price)
+            if last and hit:
                 log_event(self.log, "stop_triggered_poll", symbol=symbol,
                           last=last, stop=pos.stop_price)
-                order = Order(symbol=symbol, side="sell", qty=pos.qty, reason="stop_poll")
+                order = Order(symbol=symbol, side="sell" if pos.is_long else "buy",
+                              qty=pos.abs_qty, reason="stop_poll")
                 self._execute(order, ref_price=last)
 
     # ------------------------------------------------------------------ bar step
@@ -234,10 +237,24 @@ class LiveRunner:
 
         # Bar-close stop check (poll may have missed a spike inside the bar).
         for symbol, pos in list(self.portfolio.positions.items()):
+            if pos.stop_price is None:
+                continue
             low = float(dfs[symbol]["low"].iloc[-1])
-            if pos.stop_price is not None and low <= pos.stop_price:
-                self._execute(Order(symbol=symbol, side="sell", qty=pos.qty,
-                                    reason="stop_bar_close"), ref_price=prices[symbol])
+            high = float(dfs[symbol]["high"].iloc[-1])
+            hit = (low <= pos.stop_price) if pos.is_long else (high >= pos.stop_price)
+            if hit:
+                self._execute(Order(symbol=symbol, side="sell" if pos.is_long else "buy",
+                                    qty=pos.abs_qty, reason="stop_bar_close"),
+                              ref_price=prices[symbol])
+
+        # Short borrow/funding carry, accrued once per bar on marked notional.
+        borrow_rate = self.cost.short_borrow_bps_per_day / 1e4 * (self.tf_seconds / 86400)
+        if borrow_rate > 0:
+            for symbol, pos in self.portfolio.positions.items():
+                if not pos.is_long:
+                    carry = pos.abs_qty * prices[symbol] * borrow_rate
+                    self.portfolio.cash -= carry
+                    pos.carry_fees += carry
 
         equity = self.portfolio.equity(prices)
         events = self.risk.on_bar_close(ts, equity)
@@ -246,10 +263,10 @@ class LiveRunner:
                       equity=round(equity, 2))
             self.notifier.send(f"⚠️ risk breach: {e} at equity {equity:.2f}")
         if events:
-            for symbol in list(self.portfolio.positions):
-                self._execute(Order(symbol=symbol, side="sell",
-                                    qty=self.portfolio.positions[symbol].qty,
-                                    reason="risk_flatten"), ref_price=prices[symbol])
+            for symbol, pos in list(self.portfolio.positions.items()):
+                self._execute(Order(symbol=symbol, side="sell" if pos.is_long else "buy",
+                                    qty=pos.abs_qty, reason="risk_flatten"),
+                              ref_price=prices[symbol])
 
         for symbol, df in dfs.items():
             pos_before = symbol in self.portfolio.positions
@@ -293,6 +310,18 @@ class LiveRunner:
             self.log.debug("dashboard regeneration failed: %s", exc)
 
     def _execute(self, order: Order, ref_price: float) -> Optional[Fill]:
+        pos_before = self.portfolio.positions.get(order.symbol)
+        is_close = pos_before is not None and (
+            (order.side == "sell" and pos_before.is_long)
+            or (order.side == "buy" and not pos_before.is_long)
+        )
+        # Binance SPOT cannot sell what you don't hold: never send a
+        # short-opening order live, whatever the config claims.
+        if self.live_mode and order.side == "sell" and not is_close:
+            log_event(self.log, "order_rejected", symbol=order.symbol, side=order.side,
+                      qty=order.qty, reason="spot_cannot_short")
+            return None
+
         prices = {order.symbol: ref_price}
         # include marks for all held symbols so exposure checks are correct
         for s, p in self.portfolio.positions.items():
@@ -306,11 +335,13 @@ class LiveRunner:
             return None
         ts = pd.Timestamp.now(tz="UTC")
         fill = self.broker.submit_market(order, ref_price, ts)
-        if fill.side == "buy":
-            self.portfolio.buy(fill.symbol, fill.qty, fill.price, fill.fee, fill.ts,
-                               stop_price=order.stop_price, take_profit=order.take_profit)
+        if not is_close:
+            signed_qty = fill.qty if fill.side == "buy" else -fill.qty
+            self.portfolio.open(fill.symbol, signed_qty, fill.price, fill.fee, fill.ts,
+                                stop_price=order.stop_price, take_profit=order.take_profit)
         else:
-            trade = self.portfolio.sell(fill.symbol, fill.price, fill.fee, fill.ts, order.reason)
+            trade = self.portfolio.close(fill.symbol, fill.price, fill.fee, fill.ts,
+                                         order.reason)
             log_event(self.log, "trade_closed", symbol=trade.symbol,
                       pnl=round(trade.pnl, 2), return_pct=round(trade.return_pct * 100, 3),
                       reason=trade.exit_reason)

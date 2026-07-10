@@ -20,6 +20,8 @@ class CostModel:
     fee_bps: float = 10.0
     slippage_bps: float = 5.0
     half_spread_bps: float = 2.0
+    # Short carry (borrow interest / funding proxy), bps of notional per day.
+    short_borrow_bps_per_day: float = 3.0
 
     @property
     def adverse_bps(self) -> float:

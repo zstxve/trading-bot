@@ -31,6 +31,9 @@ class TrendParams(StrictModel):
     trail_stop: bool = True
     atr_pct_min: float = Field(0.003, ge=0.0)
     atr_pct_max: float = Field(0.08, gt=0.0)
+    # Mirror the long logic on the short side (backtest/paper research only;
+    # requires risk.allow_short too — spot live trading refuses shorts).
+    allow_short: bool = False
 
     @model_validator(mode="after")
     def _cross_checks(self) -> "TrendParams":
@@ -90,6 +93,9 @@ class RiskConfig(StrictModel):
     max_total_exposure: float = Field(0.80, gt=0, le=1.0)
     leverage: float = Field(1.0, ge=1.0)
     allow_leverage: bool = False
+    # Master gate for short positions (simulation/research). Binance SPOT
+    # cannot short: the live adapter refuses short-opening orders regardless.
+    allow_short: bool = False
     min_order_notional: float = Field(10.0, ge=0)
     max_consecutive_api_errors: int = Field(5, ge=1)
     stale_data_factor: float = Field(2.0, gt=1.0)
@@ -108,6 +114,11 @@ class CostConfig(StrictModel):
     fee_bps: float = Field(10.0, ge=0)
     slippage_bps: float = Field(5.0, ge=0)
     half_spread_bps: float = Field(2.0, ge=0)
+    # Carry cost of SHORT positions (margin borrow interest / perp funding
+    # proxy), charged per day held on the marked notional. 3 bps/day ≈ 11%/yr.
+    # Real funding is volatile and can spike far higher — short backtests are
+    # OPTIMISTIC by that difference.
+    short_borrow_bps_per_day: float = Field(3.0, ge=0)
 
 
 class BacktestConfig(StrictModel):

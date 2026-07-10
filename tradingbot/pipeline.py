@@ -37,12 +37,20 @@ def decide_bar(
     if pos is not None:
         reason = strategy.exit_signal(df, i, pos)
         if reason:
-            orders.append(Order(symbol=symbol, side="sell", qty=pos.qty, reason=reason))
+            # Closing side is the opposite of the held direction.
+            close_side = "sell" if pos.is_long else "buy"
+            orders.append(Order(symbol=symbol, side=close_side, qty=pos.abs_qty, reason=reason))
         else:
-            # Trailing stop: only ever tightened, never loosened.
+            # Trailing stop: only ever tightened, never loosened —
+            # raised for longs, lowered for shorts.
             new_stop = strategy.trail_stop(df, i, pos)
-            if new_stop is not None and (pos.stop_price is None or new_stop > pos.stop_price):
-                pos.stop_price = new_stop
+            if new_stop is not None:
+                if pos.stop_price is None:
+                    pos.stop_price = new_stop
+                elif pos.is_long and new_stop > pos.stop_price:
+                    pos.stop_price = new_stop
+                elif not pos.is_long and new_stop < pos.stop_price:
+                    pos.stop_price = new_stop
         return orders
 
     # Flat: consider a new entry (blocked entirely while halted).
@@ -51,6 +59,8 @@ def decide_bar(
     sig = strategy.entry_signal(df, i)
     if sig is None:
         return orders
+    if sig.side == "short" and not risk.cfg.allow_short:
+        return orders  # strategy wants short but the risk config forbids it
 
     price = float(df["close"].iloc[i])
     qty = size_position(
@@ -61,8 +71,10 @@ def decide_bar(
         risk_per_trade=risk.cfg.risk_per_trade,
         max_asset_exposure=risk.cfg.max_asset_exposure,
         cost_side_bps=cost_model.total_side_bps,
+        side=sig.side,
     )
     if qty > 0:
-        orders.append(Order(symbol=symbol, side="buy", qty=qty, reason=sig.reason,
+        open_side = "buy" if sig.side == "long" else "sell"
+        orders.append(Order(symbol=symbol, side=open_side, qty=qty, reason=sig.reason,
                             stop_price=sig.stop_price, take_profit=sig.take_profit))
     return orders

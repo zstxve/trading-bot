@@ -101,7 +101,7 @@ Reports (metrics JSON, trades CSV, PNG charts) land in `reports/<run_id>/`. Logs
 
 ## The two strategies
 
-**`trend_ma_cross`** — long when the 20-EMA is above the 50-EMA on 1h bars, price is above the 50-EMA on 4h bars, and ATR% of price is inside a sane band (dead chop and panic regimes are both skipped). Initial stop at 3×ATR, trailed chandelier-style. Exits on trend flip, regime loss, or stop.
+**`trend_ma_cross`** — long when the 20-EMA is above the 50-EMA on 1h bars, price is above the 50-EMA on 4h bars, and ATR% of price is inside a sane band (dead chop and panic regimes are both skipped). Initial stop at 3×ATR, trailed chandelier-style. Exits on trend flip, regime loss, or stop. With `allow_short: true` (research only, see assumptions) the logic mirrors to the short side.
 
 **`meanrev_rsi_bb`** — long when RSI(14) < 30 *and* price is below the lower Bollinger band, but **only while price holds above the 4h EMA** — it buys dips inside uptrends and refuses falling knives. Exits on RSI recovery, middle-band tag, 2×ATR stop, or a 48-bar time stop.
 
@@ -129,7 +129,7 @@ Both are deliberately boring, well-known baselines. They are starting points for
 2. **Latency assumption**: one full bar between signal and execution — conservative for 1h bars.
 3. **Stops are synthetic**: enforced by the bot (intrabar checks in backtest, ~60s ticker polling live), not resting exchange orders. If the bot process dies, live stops die with it until restart. A production system would mirror stops as exchange stop-limit orders.
 4. **Candle data is clean**: Binance history is good but not perfect; the loader drops forming candles and deduplicates, nothing more.
-5. **No shorting, no funding, no borrow**: spot long-only. In crypto bear markets a long-only system's best case is being mostly flat.
+5. **Short selling is simulation-only**: setting `risk.allow_short: true` (plus the strategy's `allow_short`) enables shorts in backtest/paper for research. The model credits proceeds to cash, marks positions with signed quantity, and charges `costs.short_borrow_bps_per_day` carry — but assumes unlimited borrow, no forced liquidation, no funding spikes. Real shorting is harsher. The live spot adapter refuses short-opening orders unconditionally (Binance spot cannot short; shorting live would require a margin/futures adapter that does not exist here).
 6. **Walk-forward windows restart flat** (no positions straddle window boundaries) — slightly conservative.
 7. **Taxes are your problem**: nothing here models them.
 

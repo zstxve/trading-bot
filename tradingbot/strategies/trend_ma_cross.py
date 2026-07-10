@@ -4,6 +4,10 @@ Long when: fast EMA > slow EMA, price above the higher-timeframe EMA, and
 ATR%% of price inside a sane band (dead markets chop you up; panic markets
 gap through stops). Exit on trend flip, regime loss, or the ATR stop —
 optionally trailed chandelier-style.
+
+With allow_short=true (research; also needs risk.allow_short) the logic is
+mirrored: short when fast EMA < slow EMA and price below the regime EMA,
+stop above entry, trailed downwards.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ class TrendMACross(Strategy):
             "regime_timeframe": "4h", "regime_ema": 50,
             "atr_n": 14, "atr_stop_mult": 3.0, "trail_stop": True,
             "atr_pct_min": 0.003, "atr_pct_max": 0.08,
+            "allow_short": False,
         }
 
     @classmethod
@@ -64,25 +69,39 @@ class TrendMACross(Strategy):
         row = df.iloc[i]
         if not self._row_ok(row):
             return None
-        if not (row["ema_fast"] > row["ema_slow"]):
-            return None
-        if not (row["close"] > row["regime_ema"]):
-            return None
         if not (p["atr_pct_min"] <= row["atr_pct"] <= p["atr_pct_max"]):
             return None
-        stop = row["close"] - p["atr_stop_mult"] * row["atr"]
-        if stop <= 0 or stop >= row["close"]:
-            return None
-        return EntrySignal(stop_price=float(stop), take_profit=None, reason="trend_long")
+
+        if row["ema_fast"] > row["ema_slow"] and row["close"] > row["regime_ema"]:
+            stop = row["close"] - p["atr_stop_mult"] * row["atr"]
+            if stop <= 0 or stop >= row["close"]:
+                return None
+            return EntrySignal(stop_price=float(stop), take_profit=None,
+                               reason="trend_long", side="long")
+
+        if (p["allow_short"] and row["ema_fast"] < row["ema_slow"]
+                and row["close"] < row["regime_ema"]):
+            stop = row["close"] + p["atr_stop_mult"] * row["atr"]
+            if stop <= row["close"]:
+                return None
+            return EntrySignal(stop_price=float(stop), take_profit=None,
+                               reason="trend_short", side="short")
+        return None
 
     def exit_signal(self, df: pd.DataFrame, i: int, position: Position) -> Optional[str]:
         row = df.iloc[i]
         if not self._row_ok(row):
             return None
-        if row["ema_fast"] < row["ema_slow"]:
-            return "trend_flip"
-        if row["close"] < row["regime_ema"]:
-            return "regime_off"
+        if position.is_long:
+            if row["ema_fast"] < row["ema_slow"]:
+                return "trend_flip"
+            if row["close"] < row["regime_ema"]:
+                return "regime_off"
+        else:
+            if row["ema_fast"] > row["ema_slow"]:
+                return "trend_flip"
+            if row["close"] > row["regime_ema"]:
+                return "regime_off"
         return None
 
     def trail_stop(self, df: pd.DataFrame, i: int, position: Position) -> Optional[float]:
@@ -91,4 +110,6 @@ class TrendMACross(Strategy):
         row = df.iloc[i]
         if pd.isna(row["atr"]):
             return None
-        return float(row["close"] - self.params["atr_stop_mult"] * row["atr"])
+        offset = self.params["atr_stop_mult"] * row["atr"]
+        # Long stops trail up from below; short stops trail down from above.
+        return float(row["close"] - offset if position.is_long else row["close"] + offset)

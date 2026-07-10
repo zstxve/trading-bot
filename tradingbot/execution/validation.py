@@ -4,8 +4,16 @@ Every order — backtest, paper or live — passes through here before execution
 Rejections are returned as (False, reason) so the caller can log them; they
 are never exceptions, because a rejected order is a normal business event.
 
-Key property: a halted system (kill switch, drawdown breach) rejects BUYS
-but always lets SELLS through — you must always be able to reduce risk.
+Order semantics are inferred from the current position:
+  buy  + short position -> cover (close short)
+  buy  + no position    -> open long
+  sell + long position  -> close long
+  sell + no position    -> open short (requires risk.allow_short)
+  same-direction add    -> rejected (no pyramiding)
+
+Key property: a halted system (kill switch, drawdown breach) rejects
+POSITION-OPENING orders but always lets closing orders through — you must
+always be able to reduce risk.
 """
 from __future__ import annotations
 
@@ -33,26 +41,44 @@ def validate_order(
     if last is None or not math.isfinite(last) or last <= 0:
         return False, "no_price"
 
-    if order.side == "buy":
-        if risk.trading_halted:
-            return False, "trading_halted"
-        est_price = cost_model.fill_price(last, "buy")
-        notional = order.qty * est_price
-        if notional < min_notional:
-            return False, "below_min_notional"
+    pos = portfolio.positions.get(order.symbol)
+
+    # ---- closing orders: always allowed (risk reduction) --------------------
+    is_close = pos is not None and (
+        (order.side == "sell" and pos.is_long) or (order.side == "buy" and not pos.is_long)
+    )
+    if is_close:
+        if order.qty > pos.abs_qty * (1 + 1e-9):
+            return False, "qty_exceeds_position"
+        return True, "ok"
+
+    # ---- same-direction add: rejected ---------------------------------------
+    if pos is not None:
+        return False, "already_long" if pos.is_long else "already_short"
+
+    # ---- opening orders ------------------------------------------------------
+    if risk.trading_halted:
+        return False, "trading_halted"
+    opening_short = order.side == "sell"
+    if opening_short and not risk.cfg.allow_short:
+        return False, "short_disabled"
+
+    fill_side = "buy" if order.side == "buy" else "sell"
+    est_price = cost_model.fill_price(last, fill_side)
+    notional = order.qty * est_price
+    if notional < min_notional:
+        return False, "below_min_notional"
+
+    if not opening_short:
         if notional + cost_model.fee(notional) > portfolio.cash + 1e-6:
             return False, "insufficient_cash"
         if order.stop_price is not None and order.stop_price >= last:
             return False, "invalid_stop"  # long stop must sit below price
-        ok, reason = risk.can_open(order.symbol, notional, portfolio, prices)
-        if not ok:
-            return False, reason
-        return True, "ok"
+    else:
+        if order.stop_price is not None and order.stop_price <= last:
+            return False, "invalid_stop"  # short stop must sit above price
 
-    # sells: only require a matching position — halts never block risk reduction
-    pos = portfolio.positions.get(order.symbol)
-    if pos is None:
-        return False, "no_position"
-    if order.qty > pos.qty * (1 + 1e-9):
-        return False, "qty_exceeds_position"
+    ok, reason = risk.can_open(order.symbol, notional, portfolio, prices)
+    if not ok:
+        return False, reason
     return True, "ok"
