@@ -164,8 +164,9 @@ launchd restarts the process but cannot keep a sleeping laptop awake — for a r
 1. Run `backtest` and `walkforward` on both strategies. Read the OOS numbers only.
 2. Run `python -m tradingbot paper` continuously (see "Running paper 24/7") for **at least 3 months or 100 trades, whichever comes later**.
 3. Weekly, run `python -m tradingbot report` — it backtests the same config over the paper session's exact date range and prints paper vs backtest side by side with divergence red flags (trade count, average trade, drawdown).
-4. Kill-switch drills: touch `state/KILL_SWITCH` while it runs; verify it halts. Kill the process mid-position; verify restart resumes state correctly.
-5. Log every manual intervention. If you keep overriding the bot, you don't have a system.
+4. Kill-switch drills: touch `state/KILL_SWITCH` while it runs; verify it refuses to trade (the process stays alive and rechecks every 60s). Kill the process mid-position; verify restart resumes state correctly.
+5. **Resetting after a kill**: deleting `state/KILL_SWITCH` resumes the loop, but after a *max-drawdown* kill the persisted peak equity re-trips the limit on the next bar. That is intentional — a 15% drawdown is a stop-and-rethink event, not a restart event. To truly restart: archive `state/` and begin a fresh session (new baseline, new clock).
+6. Log every manual intervention. If you keep overriding the bot, you don't have a system.
 
 ## Go/no-go checklist for considering live testing
 

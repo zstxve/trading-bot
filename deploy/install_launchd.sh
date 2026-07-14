@@ -4,8 +4,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE="$PROJECT_DIR/deploy/com.tradingbot.paper.plist.template"
-TARGET="$HOME/Library/LaunchAgents/com.tradingbot.paper.plist"
+TEMPLATE="$PROJECT_DIR/deploy/com.tradingbot.paperloop.plist.template"
+TARGET="$HOME/Library/LaunchAgents/com.tradingbot.paperloop.plist"
 CONFIG="${1:-config_daily.yaml}"     # which config the paper loop trades
 
 if [ ! -x "$PROJECT_DIR/.venv/bin/python" ]; then
@@ -24,7 +24,7 @@ sed -e "s|__PROJECT_DIR__|$PROJECT_DIR|g" -e "s|__CONFIG__|$CONFIG|g" \
 launchctl unload "$TARGET" 2>/dev/null || true
 launchctl load "$TARGET"
 
-echo "installed and started: com.tradingbot.paper"
+echo "installed and started: com.tradingbot.paperloop"
 echo "  status:    launchctl list | grep tradingbot"
 echo "  logs:      tail -f $PROJECT_DIR/logs/launchd.out.log"
 echo "  stop:      $PROJECT_DIR/deploy/uninstall_launchd.sh"

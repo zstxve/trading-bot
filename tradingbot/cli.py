@@ -165,19 +165,23 @@ def cmd_walkforward(args) -> int:
 
 
 def cmd_paper(args) -> int:
-    from tradingbot.live.runner import LiveRunner
+    from tradingbot.live.runner import AlreadyRunning, LiveRunner
 
     cfg = _load(args)
     logger = setup_logging(cfg.logging, _run_id("paper"))
     print("PAPER TRADING — simulated fills, real market data, no orders sent anywhere.")
     print("Stop with Ctrl-C (state is persisted; restart resumes).\n")
-    LiveRunner(cfg, logger, live_mode=False).run()
+    try:
+        LiveRunner(cfg, logger, live_mode=False).run()
+    except AlreadyRunning as exc:
+        print(f"NOT STARTED: {exc}")
+        return 3
     return 0
 
 
 def cmd_live(args) -> int:
     from tradingbot.execution.binance_live import LiveTradingBlocked
-    from tradingbot.live.runner import LiveRunner
+    from tradingbot.live.runner import AlreadyRunning, LiveRunner
 
     cfg = _load(args)
     logger = setup_logging(cfg.logging, _run_id("live"))
@@ -192,6 +196,9 @@ def cmd_live(args) -> int:
     except LiveTradingBlocked as exc:
         print(f"\n{exc}")
         return 2
+    except AlreadyRunning as exc:
+        print(f"NOT STARTED: {exc}")
+        return 3
     return 0
 
 

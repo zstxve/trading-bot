@@ -4,7 +4,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.tradingbot.paper</string>
+    <string>com.tradingbot.paperloop</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -19,12 +19,17 @@
     <key>WorkingDirectory</key>
     <string>__PROJECT_DIR__</string>
 
-    <!-- start at login and restart on crash; SIGTERM on unload triggers the
-         bot's graceful shutdown (state persisted, then exit) -->
+    <!-- start at login; restart only after a CRASH (the runner never exits
+         on its own — an engaged kill switch parks it in a waiting loop, and
+         a duplicate spawn exits immediately via the state-dir lock).
+         SIGTERM on unload triggers graceful shutdown (state persisted). -->
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
     <key>ThrottleInterval</key>
     <integer>30</integer>
 

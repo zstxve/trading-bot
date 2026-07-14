@@ -17,8 +17,10 @@ Safety behaviour:
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import signal
 import time
 from datetime import datetime, timezone
@@ -42,6 +44,10 @@ from tradingbot.risk.limits import KillSwitch, RiskManager
 from tradingbot.strategies.registry import build_strategy
 
 
+class AlreadyRunning(RuntimeError):
+    """Another runner instance holds the lock for this session."""
+
+
 class LiveRunner:
     def __init__(self, cfg: AppConfig, logger: logging.Logger, live_mode: bool = False,
                  cli_live_flag: bool = False):
@@ -58,6 +64,21 @@ class LiveRunner:
         state_dir = Path(cfg.live.state_dir)
         state_dir.mkdir(parents=True, exist_ok=True)
         prefix = "live" if live_mode else "paper"
+
+        # Single-instance guard: two runners on one state file means corrupted
+        # accounting and doubled orders. flock is released automatically when
+        # the process dies, however it dies.
+        self._lock_handle = (state_dir / f"{prefix}_runner.lock").open("w")
+        try:
+            fcntl.flock(self._lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise AlreadyRunning(
+                f"another {prefix} runner already holds "
+                f"{state_dir}/{prefix}_runner.lock — refusing to start a second instance"
+            ) from None
+        self._lock_handle.write(str(os.getpid()))
+        self._lock_handle.flush()
+
         self.state_path = state_dir / f"{prefix}_state.json"
         self.trades_csv = state_dir / f"{prefix}_trades.csv"
         self.equity_csv = state_dir / f"{prefix}_equity.csv"
@@ -151,15 +172,17 @@ class LiveRunner:
                   timeframe=self.tf, cash=round(self.portfolio.cash, 2))
         self.notifier.send(f"▶️ {mode} runner started: {self.strategy.name} on "
                            f"{', '.join(self.cfg.data.symbols)} ({self.tf})")
-        if self.kill.engaged():
-            self.log.error("kill switch engaged (%s) — refusing to start. "
-                           "Delete %s after investigating.", self.kill.reason(), self.kill.path)
-            return
         try:
+            self._wait_while_killed()
             while not self._stop:
                 self._sleep_until_next_bar()
-                if self._stop or self.kill.engaged():
+                if self._stop:
                     break
+                if self.kill.engaged():
+                    # Stay alive but refuse to trade (exiting would just make
+                    # launchd respawn us in a loop). Resumes when the file goes.
+                    self._wait_while_killed()
+                    continue
                 try:
                     self._on_bar()
                     self.risk.on_api_success()
@@ -177,6 +200,28 @@ class LiveRunner:
             self.notifier.send(f"⏹ runner stopped. cash={self.portfolio.cash:.2f} "
                                f"open_positions={len(self.portfolio.positions)} "
                                f"kill_switch={self.kill.engaged()}")
+
+    def _wait_while_killed(self) -> None:
+        """Block (without trading) while the kill-switch file exists.
+
+        Deleting the file is the deliberate manual resume action. Note: after
+        a max-drawdown kill, the persisted peak equity will re-trip the limit
+        on the next bar — see README ("Resetting after a kill").
+        """
+        warned = False
+        while self.kill.engaged() and not self._stop:
+            if not warned:
+                self.log.error("kill switch engaged (%s) — trading refused. "
+                               "Delete %s to resume; rechecking every 60s.",
+                               self.kill.reason(), self.kill.path)
+                warned = True
+            for _ in range(60):
+                if self._stop:
+                    return
+                time.sleep(1)
+        if warned and not self._stop:
+            self.log.warning("kill switch cleared — resuming trading loop")
+            self.notifier.send("🟢 kill switch cleared — runner resuming")
 
     def _sleep_until_next_bar(self) -> None:
         """Sleep until just after the next bar close, polling stops meanwhile."""
