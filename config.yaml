@@ -94,6 +94,7 @@ live:
   poll_seconds: 60           # stop-loss price poll between bar closes
   bar_close_buffer_seconds: 10
   state_dir: "state"         # paper/live state + KILL_SWITCH file live here
+  dashboard_refresh_seconds: 300  # intra-bar dashboard refresh w/ live marks
 
 logging:
   level: INFO

@@ -214,8 +214,16 @@ def _chart_b64(equity: Optional[pd.Series], trades) -> Optional[str]:
 
 
 # ---------------------------------------------------------------- assembly
-def generate_dashboard(cfg: AppConfig, prefix: str = "paper") -> Path:
-    from tradingbot.data.loader import tf_timedelta
+def generate_dashboard(
+    cfg: AppConfig,
+    prefix: str = "paper",
+    live_marks: Optional[Dict[str, float]] = None,
+    marks_ts: Optional[pd.Timestamp] = None,
+) -> Path:
+    """`live_marks` ({symbol: last price}) comes from the runner's intra-bar
+    ticker poll; with it the page shows a live equity estimate and unrealized
+    PnL instead of waiting for the next bar close."""
+    from tradingbot.data.loader import TIMEFRAME_SECONDS, tf_timedelta
 
     state_dir = Path(cfg.live.state_dir)
     state_path = state_dir / f"{prefix}_state.json"
@@ -319,18 +327,33 @@ def generate_dashboard(cfg: AppConfig, prefix: str = "paper") -> Path:
     cash = state.get("cash")
     positions = state.get("positions", [])
     last_equity = float(equity.iloc[-1]) if equity is not None and len(equity) else cash
-    total_ret = (last_equity / float(equity.iloc[0]) - 1) if equity is not None and len(equity) > 1 else 0.0
+
+    # Live equity estimate: cash + positions marked at the freshest tickers.
+    live_equity = None
+    if live_marks and cash is not None and positions \
+            and all(p["symbol"] in live_marks for p in positions):
+        live_equity = cash + sum(p["qty"] * live_marks[p["symbol"]] for p in positions)
+    shown_equity = live_equity if live_equity is not None else last_equity
+    equity_label = "equity (live est.)" if live_equity is not None else "equity (bar close)"
+    total_ret = (shown_equity / float(equity.iloc[0]) - 1) \
+        if equity is not None and len(equity) > 1 and shown_equity is not None else 0.0
+
+    # Countdown to the next bar close (when the next decision happens).
+    tf_s = TIMEFRAME_SECONDS[cfg.data.timeframe]
+    secs_left = int((int(now.timestamp()) // tf_s + 1) * tf_s - now.timestamp())
+    next_bar = f"{secs_left // 3600}h {secs_left % 3600 // 60:02d}m"
 
     sev_color = {"ok": "#1e8e3e", "warn": "#f9ab00", "fail": "#c0392b"}
     stat_cells = [
         ("session", prefix.upper()),
         ("strategy", cfg.strategy.active),
         ("timeframe", cfg.data.timeframe),
-        ("equity", f"{last_equity:,.2f}" if last_equity is not None else "n/a"),
+        (equity_label, f"{shown_equity:,.2f}" if shown_equity is not None else "n/a"),
         ("return", f"{total_ret:+.2%}"),
         ("cash", f"{cash:,.2f}" if cash is not None else "n/a"),
         ("open positions", len(positions)),
         ("closed trades", len(trades)),
+        ("next decision in", next_bar),
         ("supervision", f'<span style="color:{sev_color[sup_sev]}">{_esc(sup_status)}</span>'),
         ("alerts", "telegram ON" if telegram_on else
          f'<span style="color:{sev_color["warn"]}">disabled</span>'),
@@ -358,11 +381,21 @@ def generate_dashboard(cfg: AppConfig, prefix: str = "paper") -> Path:
     chart = (f'<img src="data:image/png;base64,{png}" alt="equity curve">'
              if png else "<p>not enough equity history for a chart yet</p>")
 
-    pos_rows = [(_esc(p["symbol"]), f'{p["qty"]:.8f}', f'{p["entry_price"]:.4f}',
-                 _esc(p.get("stop_price") or "-"), _esc(p["entry_time"]),
-                 p.get("bars_held", 0)) for p in positions]
-    pos_html = _table(pos_rows, ["symbol", "qty", "entry", "stop", "entry time", "bars held"]) \
-        if pos_rows else "<p>flat — no open positions</p>"
+    pos_headers = ["symbol", "qty", "entry", "stop", "entry time", "bars held"]
+    pos_rows = []
+    for p in positions:
+        row = [_esc(p["symbol"]), f'{p["qty"]:.8f}', f'{p["entry_price"]:.4f}',
+               _esc(p.get("stop_price") or "-"), _esc(p["entry_time"]),
+               p.get("bars_held", 0)]
+        if live_marks and p["symbol"] in live_marks:
+            mark = live_marks[p["symbol"]]
+            upnl = (mark - p["entry_price"]) * p["qty"]
+            color = "#1e8e3e" if upnl >= 0 else "#c0392b"
+            row += [f"{mark:.4f}", f'<span style="color:{color}">{upnl:+,.2f}</span>']
+        pos_rows.append(row)
+    if live_marks and positions:
+        pos_headers += ["live mark", "unrealized"]
+    pos_html = _table(pos_rows, pos_headers) if pos_rows else "<p>flat — no open positions</p>"
 
     tr_rows = [(_esc(t.symbol), f"{t.pnl:+.2f}", f"{t.return_pct:+.2%}",
                 _esc(t.exit_reason), _esc(str(t.exit_time))) for t in trades[-20:][::-1]]
@@ -466,8 +499,10 @@ def generate_dashboard(cfg: AppConfig, prefix: str = "paper") -> Path:
 <h2>ops health</h2>
 {ops_html}
 
-<footer>generated {now.strftime("%Y-%m-%d %H:%M:%S UTC")} · read-only · refreshes every 60s ·
-regenerate: <code>python -m tradingbot dashboard --config config_daily.yaml</code></footer>
+<footer>generated {now.strftime("%Y-%m-%d %H:%M:%S UTC")}{
+    " · live marks " + marks_ts.strftime("%H:%M:%S UTC") if marks_ts is not None else ""}
+· auto-regenerated every {cfg.live.dashboard_refresh_seconds}s by the runner · read-only ·
+regenerate manually: <code>python -m tradingbot dashboard --config config_daily.yaml</code></footer>
 </body></html>"""
 
     out = state_dir / "dashboard.html"

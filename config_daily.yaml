@@ -101,6 +101,7 @@ live:
   poll_seconds: 60
   bar_close_buffer_seconds: 10
   state_dir: "state"
+  dashboard_refresh_seconds: 300   # intra-bar dashboard refresh w/ live marks
 
 logging:
   level: INFO

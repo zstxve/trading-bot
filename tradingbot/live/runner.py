@@ -64,6 +64,9 @@ class LiveRunner:
         state_dir = Path(cfg.live.state_dir)
         state_dir.mkdir(parents=True, exist_ok=True)
         prefix = "live" if live_mode else "paper"
+        self._prefix = prefix
+        self._live_marks: Dict[str, float] = {}
+        self._live_marks_ts: Optional[pd.Timestamp] = None
 
         # Single-instance guard: two runners on one state file means corrupted
         # accounting and doubled orders. flock is released automatically when
@@ -238,10 +241,12 @@ class LiveRunner:
             self.notifier.send("🟢 kill switch cleared — runner resuming")
 
     def _sleep_until_next_bar(self) -> None:
-        """Sleep until just after the next bar close, polling stops meanwhile."""
+        """Sleep until just after the next bar close, polling stops and
+        refreshing the dashboard meanwhile."""
         target = ((time.time() // self.tf_seconds) + 1) * self.tf_seconds \
             + self.cfg.live.bar_close_buffer_seconds
         last_poll = 0.0
+        last_dash = 0.0
         while not self._stop and time.time() < target:
             now = time.time()
             if now - last_poll >= self.cfg.live.poll_seconds and self.portfolio.positions:
@@ -251,22 +256,40 @@ class LiveRunner:
                 except Exception as exc:  # noqa: BLE001
                     self.log.warning("stop poll failed: %s", exc)
                     self.risk.on_api_error()
+            if now - last_dash >= self.cfg.live.dashboard_refresh_seconds:
+                last_dash = now
+                self._regen_dashboard()
             time.sleep(min(1.0, max(0.0, target - time.time())))
 
+    def _regen_dashboard(self) -> None:
+        """Best-effort dashboard refresh; never interrupts trading."""
+        try:
+            from tradingbot.dashboard import generate_dashboard
+            generate_dashboard(self.cfg, prefix=self._prefix,
+                               live_marks=dict(self._live_marks) or None,
+                               marks_ts=self._live_marks_ts)
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("dashboard regeneration failed: %s", exc)
+
     def _poll_stops(self) -> None:
-        """Between bar closes: exit any position whose stop has been pierced."""
+        """Between bar closes: refresh live marks and exit any position whose
+        stop has been pierced."""
         import ccxt
         for symbol, pos in list(self.portfolio.positions.items()):
-            if pos.stop_price is None:
-                continue
             ticker = with_retries(
                 lambda s=symbol: self.data_exchange.fetch_ticker(s),
                 retriable=(ccxt.NetworkError, ccxt.RequestTimeout, ccxt.ExchangeNotAvailable),
                 logger=self.log,
             )
             last = float(ticker.get("last") or 0)
+            if not last:
+                continue
+            self._live_marks[symbol] = last
+            self._live_marks_ts = pd.Timestamp.now(tz="UTC")
+            if pos.stop_price is None:
+                continue
             hit = (last <= pos.stop_price) if pos.is_long else (last >= pos.stop_price)
-            if last and hit:
+            if hit:
                 log_event(self.log, "stop_triggered_poll", symbol=symbol,
                           last=last, stop=pos.stop_price)
                 order = Order(symbol=symbol, side="sell" if pos.is_long else "buy",
@@ -362,11 +385,7 @@ class LiveRunner:
             self._trades_today = 0
 
         # Keep the read-only dashboard current (best-effort, never fatal).
-        try:
-            from tradingbot.dashboard import generate_dashboard
-            generate_dashboard(self.cfg, prefix="live" if self.live_mode else "paper")
-        except Exception as exc:  # noqa: BLE001
-            self.log.debug("dashboard regeneration failed: %s", exc)
+        self._regen_dashboard()
 
     def _execute(self, order: Order, ref_price: float) -> Optional[Fill]:
         pos_before = self.portfolio.positions.get(order.symbol)

@@ -159,6 +159,9 @@ class LiveConfig(StrictModel):
     poll_seconds: int = Field(60, ge=5)
     bar_close_buffer_seconds: int = Field(10, ge=1)
     state_dir: str = "state"
+    # How often the runner refreshes the dashboard between bars (with live
+    # ticker marks on open positions). The page itself stays a static file.
+    dashboard_refresh_seconds: int = Field(300, ge=30)
 
 
 class LoggingConfig(StrictModel):

@@ -98,6 +98,21 @@ def test_dashboard_checklist_pending_without_reports(state_dir, tmp_path, monkey
     assert "run walkforward" in html_text
 
 
+def test_dashboard_live_marks_render_unrealized_pnl(state_dir):
+    import pandas as pd
+    cfg = AppConfig(**{"data": {"symbols": ["BTC/USDT"]},
+                       "live": {"state_dir": str(state_dir)}})
+    # SOL position in the fixture: qty 5 @ 40 -> mark 44 = +20 unrealized
+    html_text = generate_dashboard(
+        cfg, live_marks={"SOL/USDT": 44.0},
+        marks_ts=pd.Timestamp("2026-01-03 12:00", tz="UTC"),
+    ).read_text()
+    assert "equity (live est.)" in html_text
+    assert "+20.00" in html_text                    # unrealized PnL column
+    assert "live marks 12:00:00 UTC" in html_text
+    assert "next decision in" in html_text
+
+
 def test_dashboard_shows_kill_switch(state_dir):
     (state_dir / "KILL_SWITCH").write_text("2026-01-02 max_drawdown breached")
     cfg = AppConfig(**{"data": {"symbols": ["BTC/USDT"]},
