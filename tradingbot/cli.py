@@ -160,6 +160,16 @@ def cmd_walkforward(args) -> int:
     trades_to_df(wf.oos_trades).to_csv(outdir / "OOS_trades.csv", index=False)
     (outdir / "OOS_metrics.json").write_text(json.dumps(m, indent=2, default=float))
     (outdir / "windows.txt").write_text(wf.params_table())
+    # Metadata so consumers (dashboard) can match reports to a configuration
+    # instead of blindly trusting "newest".
+    (outdir / "run_info.json").write_text(json.dumps({
+        "strategy": cfg.strategy.active,
+        "timeframe": cfg.data.timeframe,
+        "symbols": cfg.data.symbols,
+        "train_bars": cfg.walkforward.train_bars,
+        "test_bars": cfg.walkforward.test_bars,
+        "generated": datetime.now(timezone.utc).isoformat(),
+    }, indent=2))
     print(f"report written to {outdir}/")
     return 0
 

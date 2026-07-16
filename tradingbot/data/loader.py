@@ -135,6 +135,20 @@ def _cache_path(cfg: DataConfig, symbol: str) -> Path:
     return Path(cfg.cache_dir) / f"{cfg.source}_{safe}_{cfg.timeframe}.csv"
 
 
+def load_cached_history(cfg: DataConfig) -> Dict[str, pd.DataFrame]:
+    """Cache-only variant of load_history: reads whatever is on disk, never
+    touches the network. Used by offline consumers (dashboard)."""
+    out: Dict[str, pd.DataFrame] = {}
+    for symbol in cfg.symbols:
+        path = _cache_path(cfg, symbol)
+        if path.exists():
+            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            df.index = pd.to_datetime(df.index, utc=True)
+            if len(df) > 0:
+                out[symbol] = df
+    return out
+
+
 def load_history(
     cfg: DataConfig,
     synthetic: bool = False,

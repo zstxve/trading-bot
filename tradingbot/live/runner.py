@@ -144,9 +144,23 @@ class LiveRunner:
                      "day_start_equity": self.risk.day_start_equity},
             "updated": datetime.now(timezone.utc).isoformat(),
         }
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        tmp.replace(self.state_path)  # atomic on POSIX
+        # Atomic replace preferred; macOS TCC sporadically denies rename in
+        # ~/Documents for detached processes (EPERM) while plain writes pass.
+        # A failed persist must NEVER kill the trading loop — fall back to a
+        # direct (non-atomic) write, and swallow-but-log anything else.
+        try:
+            blob = json.dumps(payload, indent=2)
+            tmp = self.state_path.with_suffix(".tmp")
+            try:
+                tmp.write_text(blob, encoding="utf-8")
+                tmp.replace(self.state_path)
+            except PermissionError:
+                self.state_path.write_text(blob, encoding="utf-8")
+                self.log.warning("atomic state replace denied (macOS TCC?) — "
+                                 "fell back to direct write of %s", self.state_path)
+        except Exception as exc:  # noqa: BLE001
+            self.log.error("state persist failed (%s) — continuing; state will be "
+                           "retried next cycle", exc)
 
     def _append_csv(self, path: Path, header: str, row: str) -> None:
         """Append-only history files (trades, equity) for reports/dashboard."""

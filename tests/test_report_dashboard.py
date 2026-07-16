@@ -80,6 +80,22 @@ def test_dashboard_generates_selfcontained_html(state_dir):
     assert "mean_reverted" in html_text             # trade table rendered
     assert "data:image/png;base64," in html_text    # embedded chart, no ext refs
     assert "http://" not in html_text.replace("http://www.apple.com", "")
+    # the "where do we stand / what's next" sections must always render
+    assert "go/no-go checklist" in html_text
+    assert "what to improve next" in html_text
+    assert "validation clock" in html_text
+    assert "ops health" in html_text
+
+
+def test_dashboard_checklist_pending_without_reports(state_dir, tmp_path, monkeypatch):
+    # from a cwd with no reports/, walk-forward criteria must read PENDING —
+    # missing data must never render as a pass
+    monkeypatch.chdir(tmp_path)
+    cfg = AppConfig(**{"data": {"symbols": ["BTC/USDT"]},
+                       "live": {"state_dir": str(state_dir)}})
+    html_text = generate_dashboard(cfg).read_text()
+    assert "PENDING" in html_text
+    assert "run walkforward" in html_text
 
 
 def test_dashboard_shows_kill_switch(state_dir):
