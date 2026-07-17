@@ -7,9 +7,14 @@ validation clock started **2026-07-10**, go/no-go review earliest **2026-10-09**
 Everything below assumes:
 
 ```bash
-cd ~/Documents/Coding/TradingBot
+cd ~/TradingBot
 source .venv/bin/activate
 ```
+
+> **Why the project lives in `~/TradingBot` and not `~/Documents`**: macOS
+> privacy protection (TCC) silently refuses background execution — launchd
+> agents exit 78, cron jobs never fire — for anything inside Documents/
+> Desktop/Downloads. Days were lost to this. Do not move it back.
 
 ---
 
@@ -51,24 +56,26 @@ python -m tradingbot report --config config_daily.yaml   # paper vs backtest, sa
 
 ## Running it 24/7 on this Mac
 
-One-time setup:
+Already set up (2026-07-17): both agents installed and running from
+`~/TradingBot`. They start at every login and restart on crash.
 
-1. **Reboot** (clears the wedged launchd state from Jul 13).
-2. `./deploy/install_launchd.sh` — installs both agents:
-   `com.tradingbot.paperloop` (bot) and `com.tradingbot.dashboard`
-   (http://127.0.0.1:8791/). Both start at every login and restart on crash.
-3. Verify: `launchctl list | grep tradingbot` → two lines, each with a PID.
-4. **Stop the Mac from sleeping**, or the bot sleeps with it:
-   System Settings → Battery/Energy → on power adapter, enable
-   *"Prevent automatic sleeping when the display is off"* — then leave the
-   Mac plugged in (lid open or an external display attached; a closed-lid
-   MacBook without a display sleeps regardless).
-5. Bookmark http://127.0.0.1:8791/.
+- Verify anytime: `launchctl list | grep tradingbot` → two lines with PIDs.
+- Reinstall after changes: `./deploy/install_launchd.sh`
+- **Stop the Mac from sleeping**, or the bot sleeps with it:
+  System Settings → Battery/Energy → on power adapter, enable
+  *"Prevent automatic sleeping when the display is off"* — then leave the
+  Mac plugged in (lid open or an external display attached; a closed-lid
+  MacBook without a display sleeps regardless).
+- Bookmark http://127.0.0.1:8791/.
 
-That's the whole always-on story on macOS. Honest limit: a laptop that gets
-unplugged, carried around or updated overnight will still produce gaps (the
-dashboard counts them). The gold-standard fix stays a €5/month VPS running
-the identical repo under systemd.
+Fallback if launchd ever misbehaves again: `./deploy/install_cron.sh`
+schedules `deploy/watchdog.sh` every 5 minutes (idempotent; instance lock
+prevents duplicates). Remove with `./deploy/uninstall_cron.sh`.
+
+Honest limit: a laptop that gets unplugged, carried around or updated
+overnight will still produce gaps (the dashboard counts them). The
+gold-standard fix stays a €5/month VPS running the identical repo under
+systemd.
 
 Facts that make this safe to do casually:
 
