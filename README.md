@@ -157,7 +157,7 @@ launchd restarts the process but cannot keep a sleeping laptop awake — for a r
 
 **Alerts**: create a Telegram bot (@BotFather), put `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, set `alerts.telegram_enabled: true`. You get: runner start/stop, every closed trade, risk breaches, kill-switch engagement, and a daily summary. Alert delivery failures are logged and never interrupt trading.
 
-**Dashboard**: `state/dashboard.html` — self-contained, read-only, regenerated hourly by the runner (or on demand via `python -m tradingbot dashboard`). Deliberately has no buttons: the kill switch stays a file.
+**Dashboard**: live at **http://127.0.0.1:8791/** (`python -m tradingbot dashboard-server`, installed as a launchd agent alongside the bot) — regenerates on every page load, localhost-only, GET-only. A static copy is also kept at `state/dashboard.html`. Deliberately has no buttons: the kill switch stays a file.
 
 ## Paper-trade protocol (before any real money)
 

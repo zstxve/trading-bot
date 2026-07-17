@@ -261,6 +261,18 @@ class LiveRunner:
                 self._regen_dashboard()
             time.sleep(min(1.0, max(0.0, target - time.time())))
 
+    def _write_marks_file(self) -> None:
+        """Publish live ticker marks so out-of-process consumers (the
+        dashboard server) can render them. Best-effort, never fatal."""
+        try:
+            path = self.state_path.parent / "live_marks.json"
+            path.write_text(json.dumps({
+                "ts": self._live_marks_ts.isoformat() if self._live_marks_ts is not None else None,
+                "marks": self._live_marks,
+            }), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            self.log.debug("marks file write failed: %s", exc)
+
     def _regen_dashboard(self) -> None:
         """Best-effort dashboard refresh; never interrupts trading."""
         try:
@@ -286,6 +298,7 @@ class LiveRunner:
                 continue
             self._live_marks[symbol] = last
             self._live_marks_ts = pd.Timestamp.now(tz="UTC")
+            self._write_marks_file()
             if pos.stop_price is None:
                 continue
             hit = (last <= pos.stop_price) if pos.is_long else (last >= pos.stop_price)

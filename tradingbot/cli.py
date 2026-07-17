@@ -8,6 +8,7 @@ Commands:
   live          live trading — DISABLED unless all three safety gates pass
   report        paper-vs-backtest divergence report over the same dates
   dashboard     regenerate the read-only HTML status page (state/dashboard.html)
+  dashboard-server  serve the live dashboard at http://127.0.0.1:8791/
 """
 from __future__ import annotations
 
@@ -230,6 +231,15 @@ def cmd_dashboard(args) -> int:
     return 0
 
 
+def cmd_dashboard_server(args) -> int:
+    from tradingbot.dashboard_server import serve
+
+    cfg = _load(args)
+    logger = setup_logging(cfg.logging, _run_id("dashboard"))
+    serve(cfg, port=args.port, prefix=args.session, logger=logger)
+    return 0
+
+
 # ---------------------------------------------------------------- entrypoint
 def main(argv=None) -> None:
     load_dotenv()  # pull BINANCE_API_KEY etc. from .env if present
@@ -278,6 +288,13 @@ def main(argv=None) -> None:
     add_common(p, data_opts=False)
     p.add_argument("--session", choices=["paper", "live"], default="paper")
     p.set_defaults(func=cmd_dashboard)
+
+    p = sub.add_parser("dashboard-server",
+                       help="serve the live dashboard at http://127.0.0.1:<port>/")
+    add_common(p, data_opts=False)
+    p.add_argument("--session", choices=["paper", "live"], default="paper")
+    p.add_argument("--port", type=int, default=8791)
+    p.set_defaults(func=cmd_dashboard_server)
 
     args = parser.parse_args(argv)
     try:

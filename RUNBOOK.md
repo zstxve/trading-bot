@@ -15,7 +15,8 @@ source .venv/bin/activate
 
 ## Daily routine (30 seconds)
 
-1. `open state/dashboard.html`
+1. Open **http://127.0.0.1:8791/** (bookmark it — live, self-refreshing;
+   fallback if the server is down: `open state/dashboard.html`)
 2. Look at three things:
    - **SUPERVISION** card — green `supervised (launchd)` is healthy; amber
      `unsupervised/interim` = works but won't survive a crash; red
@@ -41,11 +42,33 @@ python -m tradingbot report --config config_daily.yaml   # paper vs backtest, sa
 
 | Action | Command |
 |---|---|
-| Status | `open state/dashboard.html` or `pgrep -fl "tradingbot paper"` |
-| Start (persistent, survives reboot & crash) | `./deploy/install_launchd.sh` |
-| Start (foreground, for watching) | `python -m tradingbot paper --config config_daily.yaml` |
-| Stop | `./deploy/uninstall_launchd.sh` (agent) or Ctrl-C (foreground) |
+| Status | http://127.0.0.1:8791/ or `pgrep -fl tradingbot` |
+| Start everything (persistent: bot + dashboard, survives reboot & crash) | `./deploy/install_launchd.sh` |
+| Start bot only (foreground, for watching) | `python -m tradingbot paper --config config_daily.yaml` |
+| Start dashboard only (foreground) | `python -m tradingbot dashboard-server --config config_daily.yaml` |
+| Stop everything | `./deploy/uninstall_launchd.sh` (agents) or Ctrl-C (foreground) |
 | Refresh candles | `python -m tradingbot fetch-data --config config_daily.yaml` |
+
+## Running it 24/7 on this Mac
+
+One-time setup:
+
+1. **Reboot** (clears the wedged launchd state from Jul 13).
+2. `./deploy/install_launchd.sh` — installs both agents:
+   `com.tradingbot.paperloop` (bot) and `com.tradingbot.dashboard`
+   (http://127.0.0.1:8791/). Both start at every login and restart on crash.
+3. Verify: `launchctl list | grep tradingbot` → two lines, each with a PID.
+4. **Stop the Mac from sleeping**, or the bot sleeps with it:
+   System Settings → Battery/Energy → on power adapter, enable
+   *"Prevent automatic sleeping when the display is off"* — then leave the
+   Mac plugged in (lid open or an external display attached; a closed-lid
+   MacBook without a display sleeps regardless).
+5. Bookmark http://127.0.0.1:8791/.
+
+That's the whole always-on story on macOS. Honest limit: a laptop that gets
+unplugged, carried around or updated overnight will still produce gaps (the
+dashboard counts them). The gold-standard fix stays a €5/month VPS running
+the identical repo under systemd.
 
 Facts that make this safe to do casually:
 

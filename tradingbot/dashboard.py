@@ -222,10 +222,25 @@ def generate_dashboard(
 ) -> Path:
     """`live_marks` ({symbol: last price}) comes from the runner's intra-bar
     ticker poll; with it the page shows a live equity estimate and unrealized
-    PnL instead of waiting for the next bar close."""
+    PnL instead of waiting for the next bar close. When not passed explicitly,
+    fresh marks are picked up from state/live_marks.json (written by the
+    runner), so out-of-process renders — dashboard server, CLI — stay live."""
     from tradingbot.data.loader import TIMEFRAME_SECONDS, tf_timedelta
 
     state_dir = Path(cfg.live.state_dir)
+    if live_marks is None:
+        marks_path = state_dir / "live_marks.json"
+        if marks_path.exists():
+            try:
+                raw = json.loads(marks_path.read_text())
+                ts = pd.Timestamp(raw["ts"]) if raw.get("ts") else None
+                fresh = ts is not None and \
+                    (pd.Timestamp.now(tz="UTC") - ts) < pd.Timedelta(seconds=3 * cfg.live.poll_seconds)
+                if fresh and raw.get("marks"):
+                    live_marks = {k: float(v) for k, v in raw["marks"].items()}
+                    marks_ts = ts
+            except Exception:  # noqa: BLE001 — stale/corrupt marks: render without
+                pass
     state_path = state_dir / f"{prefix}_state.json"
     kill_path = state_dir / "KILL_SWITCH"
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
