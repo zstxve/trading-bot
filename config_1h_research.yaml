@@ -1,0 +1,115 @@
+# =============================================================================
+# 1h RESEARCH configuration — NOT the live paper session
+# =============================================================================
+# Hypothesis under test: the breakout edge that passed validation on 1d
+# survives hourly sampling when channels stay LONG (168h = 7 days), because
+# holding periods — and therefore costs per trade — stay daily-scale while
+# entries trigger hours earlier. The prior 1h failures were short-lookback
+# configs whose edge was smaller than the ~34bps round trip.
+#
+# Usage: backtest / walkforward ONLY. Do not paper-trade this config unless
+# it passes the same go/no-go bar the daily config passed.
+mode: backtest
+
+data:
+  source: binance
+  symbols: ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+  timeframe: "1h"
+  history_days: 730
+  cache_dir: "data_cache"
+
+strategy:
+  active: breakout_donchian
+  trend_ma_cross:
+    # long EMAs: ~2-day vs ~33-day trend measured hourly
+    fast_ema: 50
+    slow_ema: 800
+    regime_timeframe: "1d"
+    regime_ema: 100
+    atr_n: 24
+    atr_stop_mult: 3.0
+    trail_stop: true
+    atr_pct_min: 0.0
+    atr_pct_max: 1.0
+    allow_short: false
+  meanrev_rsi_bb:            # unchanged defaults; not part of this research
+    rsi_n: 14
+    rsi_buy: 30.0
+    rsi_exit: 55.0
+    bb_n: 20
+    bb_k: 2.0
+    regime_timeframe: "1d"
+    regime_ema: 100
+    atr_n: 14
+    atr_stop_mult: 2.0
+    max_hold_bars: 48
+  breakout_donchian:
+    entry_n: 168             # break of the prior 7-DAY high, seen hourly
+    exit_n: 48               # exit under the prior 2-day low
+    atr_n: 24
+    atr_stop_mult: 3.0
+    regime_timeframe: "1d"
+    regime_ema: 100
+    regime_filter: true
+    allow_short: false
+
+risk:
+  risk_per_trade: 0.005
+  max_drawdown: 0.15
+  daily_loss_limit: 0.02
+  max_open_positions: 4
+  max_asset_exposure: 0.25
+  max_total_exposure: 0.80
+  leverage: 1.0
+  allow_leverage: false
+  allow_short: false
+  min_order_notional: 10.0
+  max_consecutive_api_errors: 5
+  stale_data_factor: 2.0
+
+costs:
+  fee_bps: 10.0
+  slippage_bps: 5.0
+  half_spread_bps: 2.0
+  short_borrow_bps_per_day: 3.0
+
+backtest:
+  initial_capital: 10000.0
+  periods_per_year: 8760
+  oos_fraction: 0.2
+
+walkforward:
+  train_bars: 4320           # 6 months of 1h bars
+  test_bars: 1440            # 2 months
+  min_trades: 5
+  grids:
+    breakout_donchian:
+      entry_n: [120, 168, 240]   # 5 / 7 / 10 day channels
+      exit_n: [24, 48, 72]
+      atr_stop_mult: [2.0, 3.0]
+    trend_ma_cross:
+      fast_ema: [50, 100]
+      slow_ema: [400, 800]
+      atr_stop_mult: [2.0, 3.0]
+    meanrev_rsi_bb:
+      rsi_buy: [25.0, 30.0]
+      bb_k: [2.0]
+      atr_stop_mult: [2.0]
+
+live:
+  enabled: false
+  exchange: binance
+  poll_seconds: 60
+  bar_close_buffer_seconds: 10
+  state_dir: "state_1h_research"   # never collides with the live session
+  dashboard_refresh_seconds: 300
+
+logging:
+  level: INFO
+  dir: "logs"
+  json_logs: false
+
+alerts:
+  telegram_enabled: false
+  notify_trades: true
+  daily_summary: true

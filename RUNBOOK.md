@@ -163,3 +163,9 @@ Gates and steps in README → "Going live". Before first real order, additionall
 build (deliberately not built yet): exchange-resident stop orders, Binance
 lot-size/precision handling, position reconciliation. Ask for them when — and
 only when — the paper phase has earned it.
+
+**1h re-test (2026-07-19, `config_1h_research.yaml`, long lookbacks):** breakout
+168h-channel Sharpe 0.31 / PF 1.14 — survived the bear (+4.8% vs benchmark −40%)
+but far under the go/no-go bar, parameters unstable 6/9; trend dead at any EMA
+length (−43%). **1h stays closed; the daily session remains the only validated
+deployment.**
