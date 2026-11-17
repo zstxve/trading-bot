@@ -1,0 +1,11 @@
+.git
+.venv
+.env
+.claude
+.pytest_cache
+__pycache__
+data_cache
+reports
+logs
+state
+**/.DS_Store

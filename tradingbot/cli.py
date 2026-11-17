@@ -199,7 +199,7 @@ def cmd_live(args) -> int:
     print("=" * 74)
     print("WARNING: LIVE TRADING SENDS REAL ORDERS AND CAN LOSE REAL MONEY.")
     print("You are expected to have completed the paper-trading protocol in the")
-    print("README (>= 3 months / >= 100 paper trades) before reaching this point.")
+    print("docs/GUIDE.md (>= 3 months / >= 100 paper trades) before reaching this point.")
     print("=" * 74)
     time.sleep(5)  # last chance to Ctrl-C
     try:

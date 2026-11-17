@@ -1,6 +1,6 @@
 # RUNBOOK — operating the bot day to day
 
-The README explains *what* the system is; this file is *how you run it*.
+GUIDE.md explains *what* the system is; this file is *how you run it*.
 Current setup: **paper trading `breakout_donchian` on 1d bars** (`config_daily.yaml`),
 validation clock started **2026-07-10**, go/no-go review earliest **2026-10-09**.
 
@@ -159,7 +159,7 @@ Strategy status (walk-forward on 1d, 8y history, as of 2026-07-16):
 
 ## Going live (October, only if all boxes green)
 
-Gates and steps in README → "Going live". Before first real order, additionally
+Gates and steps in GUIDE.md → "Going live". Before first real order, additionally
 build (deliberately not built yet): exchange-resident stop orders, Binance
 lot-size/precision handling, position reconciliation. Ask for them when — and
 only when — the paper phase has earned it.

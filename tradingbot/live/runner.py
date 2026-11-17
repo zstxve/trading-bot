@@ -223,7 +223,7 @@ class LiveRunner:
 
         Deleting the file is the deliberate manual resume action. Note: after
         a max-drawdown kill, the persisted peak equity will re-trip the limit
-        on the next bar — see README ("Resetting after a kill").
+        on the next bar — see docs/GUIDE.md ("Resetting after a kill").
         """
         warned = False
         while self.kill.engaged() and not self._stop:

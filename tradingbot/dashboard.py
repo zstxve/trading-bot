@@ -31,7 +31,7 @@ import pandas as pd
 from tradingbot.config import AppConfig
 from tradingbot.report import divergence_notes, load_paper_history, side_by_side
 
-# Validation targets (mirrors the README go/no-go checklist).
+# Validation targets (mirrors the docs/GUIDE.md go/no-go checklist).
 TARGET_PAPER_DAYS = 90
 TARGET_TRADES = 100
 MIN_OOS_SHARPE = 1.0

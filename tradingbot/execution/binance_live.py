@@ -5,7 +5,7 @@ Real orders are refused unless ALL THREE gates pass:
   2. environment:  TRADINGBOT_LIVE_ACK set to the exact acknowledgement string
   3. CLI:          --i-really-want-live flag
 
-This module is deliberately minimal. Before ever enabling it, read the README
+This module is deliberately minimal. Before ever enabling it, read docs/GUIDE.md
 section "Going live" and complete the paper-trading protocol. Expect to need
 per-symbol quantity precision handling (exchange lot size filters) and fill
 reconciliation for production use.
